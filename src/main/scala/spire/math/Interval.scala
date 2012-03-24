@@ -148,13 +148,12 @@ case class OpenAbove[T](x:T)(implicit val order:Order[T]) extends Upper[T] with 
   override def binop(rhs:Bound[T])(f:(T, T) => T):Upper[T] = super.binop(rhs)(f).toUpper
 }
 
-trait GenInterval[T, U <: GenInterval[T, U]] {
-  implicit def order:Order[T]
+object ContinuousInterval {
+  def apply[T:Order](lower:Lower[T], upper:Upper[T]) = Interval(lower, upper)
+}
 
-  def lower:Lower[T]
-  def upper:Upper[T]
-
-  protected[this] def coerce(a:Bound[T], b:Bound[T]):U
+case class Interval[T](lower:Lower[T], upper:Upper[T])(implicit val order:Order[T]) {
+  protected[math] def coerce(a:Bound[T], b:Bound[T]) = Interval(a.toLower, b.toUpper)
 
   def isAbove(t:T) = 0 < lower.comparePt(t)
   def isBelow(t:T) = upper.comparePt(t) < 0
@@ -162,159 +161,160 @@ trait GenInterval[T, U <: GenInterval[T, U]] {
   def contains(t:T) = lower.comparePt(t) <= 0 && 0 <= upper.comparePt(t)
   def crosses(t:T) = lower.comparePt(t) < 0 && 0 < upper.comparePt(t)
 
-  def mask(rhs:U):U = coerce(lower max rhs.lower, upper min rhs.upper)
+  def mask(rhs:Interval[T]):Interval[T] = coerce(lower max rhs.lower, upper min rhs.upper)
 
-  def split(t:T):(U, U) = {
+  def split(t:T):(Interval[T], Interval[T]) = {
     val below = coerce(UnboundBelow[T], OpenAbove(t))
     val above = coerce(OpenBelow(t), UnboundAbove[T])
     (this mask below, this mask above)
   }
 }
 
-trait GenRingInterval[T, U <: GenRingInterval[T, U]] extends GenInterval[T, U] {
-  implicit def num:Ring[T]
+object Interval {
+  implicit def ringIntervalOps[T:Ring:Order](i:Interval[T]) = new RingIntervalOps(i)
+  implicit def euclideanRingIntervalOps[T:EuclideanRing](i:Interval[T]) = new EuclideanRingIntervalOps(i)
+  implicit def fieldIntervalOps[T:Field](i:Interval[T]) = new FieldIntervalOps(i)
+}
+
+final class RingIntervalOps[T](lhs:Interval[T])(implicit num:Ring[T], o:Order[T]) {
 
   implicit def boundRingOps(b:Bound[T]) = new BoundRingOps(b)
 
-  def splitAtZero = split(num.zero)
+  def splitAtZero = lhs.split(num.zero)
 
   def abs = {
-    val a = lower.abs
-    val b = upper.abs
-    if (crosses(num.zero)) coerce(ClosedBelow(num.zero), a max b)
-    else if (a < b) coerce(a, b)
-    else coerce(b, a)
+    val a = lhs.lower.abs
+    val b = lhs.upper.abs
+    if (lhs.crosses(num.zero)) lhs.coerce(ClosedBelow(num.zero), a max b)
+    else if (a < b) lhs.coerce(a, b)
+    else lhs.coerce(b, a)
   }
   
-  def unary_- = coerce(-upper, -lower)
+  def unary_- = lhs.coerce(-lhs.upper, -lhs.lower)
   
-  def +(rhs:U):U = coerce(lower + rhs.lower, upper + rhs.upper)
-  def +(rhs:T):U = coerce(lower + rhs, upper + rhs)
+  def +(rhs:Interval[T]):Interval[T] = lhs.coerce(lhs.lower + rhs.lower, lhs.upper + rhs.upper)
+  def +(rhs:T):Interval[T] = lhs.coerce(lhs.lower + rhs, lhs.upper + rhs)
   
-  def -(rhs:U):U = coerce(lower - rhs.upper, upper - rhs.lower)
-  def -(rhs:T):U = coerce(lower - rhs, upper - rhs)
+  def -(rhs:Interval[T]):Interval[T] = lhs.coerce(lhs.lower - rhs.upper, lhs.upper - rhs.lower)
+  def -(rhs:T):Interval[T] = lhs.coerce(lhs.lower - rhs, lhs.upper - rhs)
   
-  def *(rhs:U):U = {
-    val tcz = crosses(num.zero)
+  def *(rhs:Interval[T]):Interval[T] = {
+    val tcz = lhs.crosses(num.zero)
     val rcz = rhs.crosses(num.zero)
   
-    val ll = lower * rhs.lower
-    val lu = lower * rhs.upper
-    val ul = upper * rhs.lower
-    val uu = upper * rhs.upper
+    val ll = lhs.lower * rhs.lower
+    val lu = lhs.lower * rhs.upper
+    val ul = lhs.upper * rhs.lower
+    val uu = lhs.upper * rhs.upper
   
     if (tcz && rcz) {
-      coerce(lu min ul, ll max uu)
+      lhs.coerce(lu min ul, ll max uu)
     } else if (tcz) {
-      coerce(ll min lu, ul max uu)
+      lhs.coerce(ll min lu, ul max uu)
     } else if (rcz) {
-      coerce(ll min ul, lu max uu)
-    } else if (isBelow(num.zero) == rhs.isBelow(num.zero)) {
-      coerce(ll min uu, ll max uu)
+      lhs.coerce(ll min ul, lu max uu)
+    } else if (lhs.isBelow(num.zero) == rhs.isBelow(num.zero)) {
+      lhs.coerce(ll min uu, ll max uu)
     } else {
-      coerce(lu min ul, lu max ul)
+      lhs.coerce(lu min ul, lu max ul)
     }
   }
-  def *(rhs:T):U = {
-    val a = lower * rhs
-    val b = upper * rhs
-    if (a < b) coerce(a, b) else coerce(b, a)
+  def *(rhs:T):Interval[T] = {
+    val a = lhs.lower * rhs
+    val b = lhs.upper * rhs
+    if (a < b) lhs.coerce(a, b) else lhs.coerce(b, a)
   }
 
-  def pow(rhs:Int):U = {
-    val a = lower pow rhs
-    val b = upper pow rhs
+  def pow(rhs:Int):Interval[T] = {
+    val a = lhs.lower pow rhs
+    val b = lhs.upper pow rhs
   
-    if (contains(num.zero) && rhs % 2 == 0) {
-      coerce(ClosedBelow(num.zero), a max b)
+    if (lhs.contains(num.zero) && rhs % 2 == 0) {
+      lhs.coerce(ClosedBelow(num.zero), a max b)
     } else {
-      if (a < b) coerce(a, b) else coerce(b, a)
+      if (a < b) lhs.coerce(a, b) else lhs.coerce(b, a)
     }
   }
 }
 
-trait GenDiscreteInterval[T, U <: GenDiscreteInterval[T, U]] extends GenRingInterval[T, U] {
-  implicit def num:EuclideanRing[T]
-  implicit def order:Order[T]
+final class EuclideanRingIntervalOps[T](lhs:Interval[T])(implicit num:EuclideanRing[T]) {
 
   implicit def boundEuclideanRingOps(b:Bound[T]) = new BoundEuclideanRingOps(b)
 
-  def /~(rhs:U):U = {
+  def /~(rhs:Interval[T]):Interval[T] = {
     if (rhs.contains(num.zero)) sys.error("divide-by-zero possible")
 
-    val ll = lower /~ rhs.lower
-    val lu = lower /~ rhs.upper
-    val ul = upper /~ rhs.lower
-    val uu = upper /~ rhs.upper
+    val ll = lhs.lower /~ rhs.lower
+    val lu = lhs.lower /~ rhs.upper
+    val ul = lhs.upper /~ rhs.lower
+    val uu = lhs.upper /~ rhs.upper
 
     val bz = rhs.isBelow(num.zero)
 
-    if (crosses(num.zero)) {
-      if (bz) coerce(uu, lu) else coerce(ll, ul)
-    } else if (isAbove(num.zero)) {
-      if (bz) coerce(uu, ll) else coerce(lu, ul)
+    if (lhs.crosses(num.zero)) {
+      if (bz) lhs.coerce(uu, lu) else lhs.coerce(ll, ul)
+    } else if (lhs.isAbove(num.zero)) {
+      if (bz) lhs.coerce(uu, ll) else lhs.coerce(lu, ul)
     } else {
-      if (bz) coerce(ul, lu) else coerce(ll, uu)
+      if (bz) lhs.coerce(ul, lu) else lhs.coerce(ll, uu)
     }
   }
   def /~(rhs:T) = {
-    val a = lower /~ rhs
-    val b = upper /~ rhs
-    if (a < b) coerce(a, b) else coerce(b, a)
+    val a = lhs.lower /~ rhs
+    val b = lhs.upper /~ rhs
+    if (a < b) lhs.coerce(a, b) else lhs.coerce(b, a)
   }
 }
 
-trait GenContinuousInterval[T, U <: GenContinuousInterval[T, U]] extends GenRingInterval[T, U] {
-  implicit def num:Field[T]
-  implicit def order:Order[T]
+final class FieldIntervalOps[T](lhs:Interval[T])(implicit num:Field[T]) {
 
   implicit def boundFieldOps(b:Bound[T]) = new BoundFieldOps(b)
 
-  def /(rhs:U):U = {
+  def /(rhs:Interval[T]):Interval[T] = {
     if (rhs.contains(num.zero)) sys.error("divide-by-zero possible")
 
-    val ll = lower / rhs.lower
-    val lu = lower / rhs.upper
-    val ul = upper / rhs.lower
-    val uu = upper / rhs.upper
+    val ll = lhs.lower / rhs.lower
+    val lu = lhs.lower / rhs.upper
+    val ul = lhs.upper / rhs.lower
+    val uu = lhs.upper / rhs.upper
 
     val bz = rhs.isBelow(num.zero)
 
-    if (crosses(num.zero)) {
-      if (bz) coerce(uu, lu) else coerce(ll, ul)
-    } else if (isAbove(num.zero)) {
-      if (bz) coerce(uu, ll) else coerce(lu, ul)
+    if (lhs.crosses(num.zero)) {
+      if (bz) lhs.coerce(uu, lu) else lhs.coerce(ll, ul)
+    } else if (lhs.isAbove(num.zero)) {
+      if (bz) lhs.coerce(uu, ll) else lhs.coerce(lu, ul)
     } else {
-      if (bz) coerce(ul, lu) else coerce(ll, uu)
+      if (bz) lhs.coerce(ul, lu) else lhs.coerce(ll, uu)
     }
   }
   def /(rhs:T) = {
-    val a = lower / rhs
-    val b = upper / rhs
-    if (a < b) coerce(a, b) else coerce(b, a)
+    val a = lhs.lower / rhs
+    val b = lhs.upper / rhs
+    if (a < b) lhs.coerce(a, b) else lhs.coerce(b, a)
   }
 }
 
-case class Interval[T](lower:Lower[T], upper:Upper[T])(implicit val order:Order[T])
-extends GenInterval[T, Interval[T]] {
-  protected[this] def coerce(a:Bound[T], b:Bound[T]) = Interval(a.toLower, b.toUpper)
-}
-
-case class RingInterval[T](lower:Lower[T], upper:Upper[T])(implicit val order:Order[T], val num:Ring[T])
-extends GenRingInterval[T, RingInterval[T]] {
-  protected[this] def coerce(a:Bound[T], b:Bound[T]) = RingInterval(a.toLower, b.toUpper)
-}
-
-case class DiscreteInterval[T](lower:Lower[T], upper:Upper[T])(implicit f:Integral[T])
-extends GenDiscreteInterval[T, DiscreteInterval[T]] {
-  implicit def num:EuclideanRing[T] = f
-  implicit def order:Order[T] = f
-  protected[this] def coerce(a:Bound[T], b:Bound[T]) = DiscreteInterval(a.toLower, b.toUpper)
-}
-
-case class ContinuousInterval[T](lower:Lower[T], upper:Upper[T])(implicit f:Fractional[T])
-extends GenContinuousInterval[T, ContinuousInterval[T]] {
-  implicit def num:Field[T] = f
-  implicit def order:Order[T] = f
-  protected[this] def coerce(a:Bound[T], b:Bound[T]) = ContinuousInterval(a.toLower, b.toUpper)
-}
+//case class Interval[T](lower:Lower[T], upper:Upper[T])(implicit val order:Order[T])
+//extends GenInterval[T, Interval[T]] {
+//  protected[this] def coerce(a:Bound[T], b:Bound[T]) = Interval(a.toLower, b.toUpper)
+//}
+//
+//case class RingInterval[T](lower:Lower[T], upper:Upper[T])(implicit val order:Order[T], val num:Ring[T])
+//extends GenRingInterval[T, RingInterval[T]] {
+//  protected[this] def coerce(a:Bound[T], b:Bound[T]) = RingInterval(a.toLower, b.toUpper)
+//}
+//
+//case class DiscreteInterval[T](lower:Lower[T], upper:Upper[T])(implicit f:Integral[T])
+//extends GenDiscreteInterval[T, DiscreteInterval[T]] {
+//  implicit def num:EuclideanRing[T] = f
+//  implicit def order:Order[T] = f
+//  protected[this] def coerce(a:Bound[T], b:Bound[T]) = DiscreteInterval(a.toLower, b.toUpper)
+//}
+//
+//case class ContinuousInterval[T](lower:Lower[T], upper:Upper[T])(implicit f:Fractional[T])
+//extends GenContinuousInterval[T, ContinuousInterval[T]] {
+//  implicit def num:Field[T] = f
+//  implicit def order:Order[T] = f
+//  protected[this] def coerce(a:Bound[T], b:Bound[T]) = ContinuousInterval(a.toLower, b.toUpper)
+//}

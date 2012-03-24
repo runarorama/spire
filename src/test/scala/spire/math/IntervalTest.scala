@@ -11,6 +11,8 @@ class IntervalTest extends FunSuite {
   val b = cc(-8.0, 2.0)
   val c = ContinuousInterval(OpenBelow(0.0), ClosedAbove(1.0))
 
+  import Interval._
+
   test("a.contains(0.0)") { assert(a.contains(0.0)) }
   test("a.crosses(0.0)") { assert(!a.crosses(0.0)) }
   test("a.contains(3.334)") { assert(a.contains(3.334)) }
@@ -40,6 +42,8 @@ class ContinuousIntervalTest extends FunSuite {
   val b = 5.0
   val c = 1.0
   val d = 4.0
+
+  import Interval._
 
   // numerator interval crosses zero
   test("[-a,b] / [c,d]") { assert(cc(-a, b) / cc(c, d) === cc(-a / c, b / c)) }
